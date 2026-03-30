@@ -129,6 +129,21 @@ def parse_datetime(value):
     return uk_timezone.normalize(utc_datetime.astimezone(uk_timezone))
 
 
+def safe_parse_datetime(value):
+    """Parse datetime with error handling for malformed timestamps.
+
+    Returns None if the timestamp is invalid (string, negative, out of range).
+    """
+    try:
+        if not isinstance(value, (int, float)):
+            return None
+        if value < 0:
+            return None
+        return parse_datetime(value)
+    except (TypeError, ValueError, OSError):
+        return None
+
+
 def get_in(data_dict, *key_path):
     for k in key_path:
         data_dict = data_dict.get(k, None)
@@ -1033,6 +1048,244 @@ def extract_viewed(zipfile, meta_data=None):
         },
     )
 
+
+def extract_saved_posts(zipfile, meta_data=None):
+    """Extract saved posts from saved_posts.json and saved_collections.json"""
+    if meta_data is None:
+        meta_data = []
+
+    rows = []
+
+    # Extract posts from saved_collections.json (posts in collections)
+    current_collection = None
+    for data in glob_json(zipfile, "*/saved/saved_collections.json"):
+        for item in get_list(data, "saved_saved_collections"):
+            # Check if this is a collection header
+            if item.get("title") == "Collection":
+                current_collection = get_in(item, "string_map_data", "Name", "value") or "-"
+            else:
+                # This is a post in the current collection
+                string_map = get_dict(item, "string_map_data")
+                name_data = get_dict(string_map, "Name")
+                author = name_data.get("value", "")
+                url = name_data.get("href", "")
+                timestamp = get_in(string_map, "Added Time", "timestamp")
+                dt = safe_parse_datetime(timestamp)
+                if dt:
+                    rows.append({
+                        "Date and time": dt.strftime(datetime_format),
+                        "Author": author,
+                        "URL": url,
+                        "Collection": current_collection or "-",
+                    })
+
+    # Extract posts from saved_posts.json (posts without collection)
+    for data in glob_json(zipfile, "*/saved/saved_posts.json"):
+        for item in get_list(data, "saved_saved_media"):
+            author = item.get("title", "")
+            string_map = get_dict(item, "string_map_data")
+            saved_on = get_dict(string_map, "Saved on")
+            url = saved_on.get("href", "")
+            timestamp = saved_on.get("timestamp")
+            dt = safe_parse_datetime(timestamp)
+            if dt:
+                rows.append({
+                    "Date and time": dt.strftime(datetime_format),
+                    "Author": author,
+                    "URL": url,
+                    "Collection": "-",
+                })
+
+    df = pd.DataFrame(rows, columns=["Date and time", "Author", "URL", "Collection"])
+
+    # Sort by date (newest first) before limiting
+    if len(df) > 0:
+        df = df.sort_values(by=["Date and time"], ascending=False).reset_index(drop=True)
+
+    # Limit to MAX_TABLE_ROWS
+    if len(df) > MAX_TABLE_ROWS:
+        meta_data.append(("info", f"Saved posts: Limited to {MAX_TABLE_ROWS} most recent items (out of {len(df)} total)"))
+        df = df.head(MAX_TABLE_ROWS)
+
+    description = props.Translatable(
+        {
+            "en": "This table shows posts you have saved on Instagram.",
+            "de": "Diese Tabelle zeigt Beiträge, die Sie auf Instagram gespeichert haben.",
+            "it": "Questa tabella mostra i post che hai salvato su Instagram.",
+            "nl": "Deze tabel toont berichten die je hebt opgeslagen op Instagram.",
+        }
+    )
+
+    return ExtractionResult(
+        "instagram_saved_posts",
+        props.Translatable(
+            {
+                "en": "Saved posts",
+                "de": "Gespeicherte Beiträge",
+                "it": "Post salvati",
+                "nl": "Opgeslagen berichten",
+            }
+        ),
+        df,
+        description,
+        [],  # No visualizations
+        headers={
+            "Date and time": props.Translatable(
+                {"en": "Date and time", "de": "Datum und Uhrzeit", "it": "Data e ora", "nl": "Datum en tijd"}
+            ),
+            "Author": props.Translatable(
+                {"en": "Author", "de": "Autor", "it": "Autore", "nl": "Auteur"}
+            ),
+            "URL": props.Translatable(
+                {"en": "URL", "de": "URL", "it": "URL", "nl": "URL"}
+            ),
+            "Collection": props.Translatable(
+                {"en": "Collection", "de": "Sammlung", "it": "Raccolta", "nl": "Verzameling"}
+            ),
+        },
+    )
+
+
+def extract_liked_posts(zipfile, meta_data=None):
+    """Extract liked posts from liked_posts.json"""
+    if meta_data is None:
+        meta_data = []
+
+    rows = []
+
+    for data in glob_json(zipfile, "*/likes/liked_posts.json"):
+        for item in get_list(data, "likes_media_likes"):
+            author = item.get("title", "")
+            string_list = get_list(item, "string_list_data")
+            if string_list:
+                first_item = string_list[0]
+                url = first_item.get("href", "")
+                timestamp = first_item.get("timestamp")
+                dt = safe_parse_datetime(timestamp)
+                if dt:
+                    rows.append({
+                        "Date and time": dt.strftime(datetime_format),
+                        "Author": author,
+                        "URL": url,
+                    })
+
+    df = pd.DataFrame(rows, columns=["Date and time", "Author", "URL"])
+
+    # Sort by date (newest first) before limiting
+    if len(df) > 0:
+        df = df.sort_values(by=["Date and time"], ascending=False).reset_index(drop=True)
+
+    # Limit to MAX_TABLE_ROWS
+    if len(df) > MAX_TABLE_ROWS:
+        meta_data.append(("info", f"Liked posts: Limited to {MAX_TABLE_ROWS} most recent items (out of {len(df)} total)"))
+        df = df.head(MAX_TABLE_ROWS)
+
+    description = props.Translatable(
+        {
+            "en": "This table shows posts you have liked on Instagram.",
+            "de": "Diese Tabelle zeigt Beiträge, die Sie auf Instagram geliked haben.",
+            "it": "Questa tabella mostra i post a cui hai messo Mi piace su Instagram.",
+            "nl": "Deze tabel toont berichten die je hebt geliked op Instagram.",
+        }
+    )
+
+    return ExtractionResult(
+        "instagram_liked_posts",
+        props.Translatable(
+            {
+                "en": "Liked posts",
+                "de": "Gelikte Beiträge",
+                "it": "Post con Mi piace",
+                "nl": "Gelikete berichten",
+            }
+        ),
+        df,
+        description,
+        [],  # No visualizations
+        headers={
+            "Date and time": props.Translatable(
+                {"en": "Date and time", "de": "Datum und Uhrzeit", "it": "Data e ora", "nl": "Datum en tijd"}
+            ),
+            "Author": props.Translatable(
+                {"en": "Author", "de": "Autor", "it": "Autore", "nl": "Auteur"}
+            ),
+            "URL": props.Translatable(
+                {"en": "URL", "de": "URL", "it": "URL", "nl": "URL"}
+            ),
+        },
+    )
+
+
+def extract_liked_comments(zipfile, meta_data=None):
+    """Extract liked comments from liked_comments.json"""
+    if meta_data is None:
+        meta_data = []
+
+    rows = []
+
+    for data in glob_json(zipfile, "*/likes/liked_comments.json"):
+        for item in get_list(data, "likes_comment_likes"):
+            author = item.get("title", "")
+            string_list = get_list(item, "string_list_data")
+            if string_list:
+                first_item = string_list[0]
+                url = first_item.get("href", "")
+                timestamp = first_item.get("timestamp")
+                dt = safe_parse_datetime(timestamp)
+                if dt:
+                    rows.append({
+                        "Date and time": dt.strftime(datetime_format),
+                        "Author": author,
+                        "URL": url,
+                    })
+
+    df = pd.DataFrame(rows, columns=["Date and time", "Author", "URL"])
+
+    # Sort by date (newest first) before limiting
+    if len(df) > 0:
+        df = df.sort_values(by=["Date and time"], ascending=False).reset_index(drop=True)
+
+    # Limit to MAX_TABLE_ROWS
+    if len(df) > MAX_TABLE_ROWS:
+        meta_data.append(("info", f"Liked comments: Limited to {MAX_TABLE_ROWS} most recent items (out of {len(df)} total)"))
+        df = df.head(MAX_TABLE_ROWS)
+
+    description = props.Translatable(
+        {
+            "en": "This table shows comments you have liked on Instagram.",
+            "de": "Diese Tabelle zeigt Kommentare, die Sie auf Instagram geliked haben.",
+            "it": "Questa tabella mostra i commenti a cui hai messo Mi piace su Instagram.",
+            "nl": "Deze tabel toont reacties die je hebt geliked op Instagram.",
+        }
+    )
+
+    return ExtractionResult(
+        "instagram_liked_comments",
+        props.Translatable(
+            {
+                "en": "Liked comments",
+                "de": "Gelikte Kommentare",
+                "it": "Commenti con Mi piace",
+                "nl": "Gelikete reacties",
+            }
+        ),
+        df,
+        description,
+        [],  # No visualizations
+        headers={
+            "Date and time": props.Translatable(
+                {"en": "Date and time", "de": "Datum und Uhrzeit", "it": "Data e ora", "nl": "Datum en tijd"}
+            ),
+            "Author": props.Translatable(
+                {"en": "Author", "de": "Autor", "it": "Autore", "nl": "Auteur"}
+            ),
+            "URL": props.Translatable(
+                {"en": "URL", "de": "URL", "it": "URL", "nl": "URL"}
+            ),
+        },
+    )
+
+
 def is_html_format(zipfile):
     """
     Check if the Instagram export is in HTML format by looking for .html files
@@ -1069,6 +1322,9 @@ def extract_data(path, locale="en", meta_data=None):
         extract_comments_and_likes(zfile, meta_data),
         extract_viewed(zfile, meta_data),
         extract_direct_message_activity(zfile, meta_data),
+        extract_saved_posts(zfile, meta_data),
+        extract_liked_posts(zfile, meta_data),
+        extract_liked_comments(zfile, meta_data),
     ]
 
 

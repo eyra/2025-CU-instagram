@@ -188,7 +188,7 @@ class TestHtmlFormatDetection:
             result = extract_data(zip_path)
             # Verify we get the expected structure
             assert isinstance(result, list)
-            assert len(result) == 5  # 5 extraction results
+            assert len(result) == 8  # 8 extraction results (5 original + 3 new tables)
         except HtmlFormatError:
             pytest.fail("extract_data raised HtmlFormatError for valid JSON format")
 
