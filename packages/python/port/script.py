@@ -1189,20 +1189,19 @@ def extract_liked_posts(zipfile, meta_data=None):
     rows = []
 
     for data in glob_json(zipfile, "*/likes/liked_posts.json"):
-        for item in get_list(data, "likes_media_likes"):
+        for item in _resolve_event_list(data, "likes_media_likes"):
             author = item.get("title", "")
+            url = item.get("href", "")
             string_list = get_list(item, "string_list_data")
             if string_list:
-                first_item = string_list[0]
-                url = first_item.get("href", "")
-                timestamp = first_item.get("timestamp")
-                dt = get_timestamp(timestamp)
-                if dt:
-                    rows.append({
-                        "Date and time": dt.strftime(datetime_format),
-                        "Author": author,
-                        "URL": url,
-                    })
+                url = string_list[0].get("href", url)
+            dt = extract_event_timestamp(item)
+            if dt:
+                rows.append({
+                    "Date and time": dt.strftime(datetime_format),
+                    "Author": author,
+                    "URL": url,
+                })
 
     df = pd.DataFrame(rows, columns=["Date and time", "Author", "URL"])
 
@@ -1259,20 +1258,19 @@ def extract_liked_comments(zipfile, meta_data=None):
     rows = []
 
     for data in glob_json(zipfile, "*/likes/liked_comments.json"):
-        for item in get_list(data, "likes_comment_likes"):
+        for item in _resolve_event_list(data, "likes_comment_likes"):
             author = item.get("title", "")
+            url = item.get("href", "")
             string_list = get_list(item, "string_list_data")
             if string_list:
-                first_item = string_list[0]
-                url = first_item.get("href", "")
-                timestamp = first_item.get("timestamp")
-                dt = get_timestamp(timestamp)
-                if dt:
-                    rows.append({
-                        "Date and time": dt.strftime(datetime_format),
-                        "Author": author,
-                        "URL": url,
-                    })
+                url = string_list[0].get("href", url)
+            dt = extract_event_timestamp(item)
+            if dt:
+                rows.append({
+                    "Date and time": dt.strftime(datetime_format),
+                    "Author": author,
+                    "URL": url,
+                })
 
     df = pd.DataFrame(rows, columns=["Date and time", "Author", "URL"])
 

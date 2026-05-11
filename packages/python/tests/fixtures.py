@@ -100,6 +100,11 @@ def _newer_flat_event(ts):
     return {"timestamp": ts, "media": [], "label_values": []}
 
 
+def _newer_liked_event(ts):
+    """A liked post/comment entry in the newer flat shape (timestamp + author + URL at root)."""
+    return {"timestamp": ts, "title": "liked_user", "href": "https://instagram.com/p/test/"}
+
+
 def _newer_creation_event(ts):
     """A single content entry in the newer flat shape."""
     return {"creation_timestamp": ts}
@@ -135,11 +140,21 @@ def make_newer_format_zip():
         "ads_information/ads_and_topics/ads_viewed.json":
             [_newer_flat_event(t) for t in _timestamp_list(2, 300)],
 
-        # likes — top-level list + flat `timestamp`
+        # likes — top-level list + flat `timestamp` + author/URL for liked_posts/comments tables
         "your_instagram_activity/likes/liked_posts.json":
-            [_newer_flat_event(t) for t in _timestamp_list(7, 400)],
+            [_newer_liked_event(t) for t in _timestamp_list(7, 400)],
         "your_instagram_activity/likes/liked_comments.json":
-            [_newer_flat_event(t) for t in _timestamp_list(4, 500)],
+            [_newer_liked_event(t) for t in _timestamp_list(4, 500)],
+
+        # saved — legacy dict shape (no known newer flat shape yet)
+        "your_instagram_activity/saved/saved_posts.json": {
+            "saved_saved_media": [
+                {"title": "saved_author", "string_map_data": {
+                    "Saved on": {"href": "https://instagram.com/p/saved/", "timestamp": t}
+                }}
+                for t in _timestamp_list(3, 600)
+            ],
+        },
 
         # content — top-level list + flat `creation_timestamp`
         "your_instagram_activity/media/posts_1.json":
@@ -206,6 +221,18 @@ def make_legacy_format_zip():
         "test/likes/liked_posts.json": {
             "likes_media_likes":
                 [_legacy_string_list_entry(t) for t in _timestamp_list(7, 400)],
+        },
+        "test/likes/liked_comments.json": {
+            "likes_comment_likes":
+                [_legacy_string_list_entry(t) for t in _timestamp_list(4, 410)],
+        },
+        "test/saved/saved_posts.json": {
+            "saved_saved_media": [
+                {"title": "saved_author", "string_map_data": {
+                    "Saved on": {"href": "https://instagram.com/p/saved/", "timestamp": t}
+                }}
+                for t in _timestamp_list(3, 420)
+            ],
         },
 
         "test/followers_and_following/followers_1.json": {

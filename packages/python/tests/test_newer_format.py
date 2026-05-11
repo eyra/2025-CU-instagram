@@ -94,6 +94,30 @@ class TestNewerFormatExtraction:
         finally:
             os.unlink(path)
 
+    def test_saved_posts_populated(self):
+        path = make_newer_format_zip()
+        try:
+            tables = _run(path)
+            assert len(tables["instagram_saved_posts"]) == 3
+        finally:
+            os.unlink(path)
+
+    def test_liked_posts_populated(self):
+        path = make_newer_format_zip()
+        try:
+            tables = _run(path)
+            assert len(tables["instagram_liked_posts"]) == 7
+        finally:
+            os.unlink(path)
+
+    def test_liked_comments_populated(self):
+        path = make_newer_format_zip()
+        try:
+            tables = _run(path)
+            assert len(tables["instagram_liked_comments"]) == 4
+        finally:
+            os.unlink(path)
+
 
 class TestLegacyFormatNoRegression:
     """Legacy extraction must continue to behave as before the shape fix."""
@@ -103,9 +127,12 @@ class TestLegacyFormatNoRegression:
         try:
             tables = _run(path)
             # make_legacy_format_zip produces these exact counts today.
-            assert len(tables["instagram_comments_and_likes"]) == 7
+            assert len(tables["instagram_comments_and_likes"]) == 11
             assert len(tables["instagram_viewed"]) == 15
             assert len(tables["instagram_direct_message_activity"]) == 5
+            assert len(tables["instagram_saved_posts"]) == 3
+            assert len(tables["instagram_liked_posts"]) == 7
+            assert len(tables["instagram_liked_comments"]) == 4
         finally:
             os.unlink(path)
 
