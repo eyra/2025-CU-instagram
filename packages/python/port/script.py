@@ -1652,26 +1652,35 @@ def retry_confirmation(platform):
 def html_format_retry_confirmation(platform):
     text = props.Translatable(
         {
-            "en": "The uploaded file contains Instagram data in HTML format, but we need JSON format.",
-            "de": "Die hochgeladene Datei enthält Instagram-Daten im HTML-Format, aber wir benötigen das JSON-Format.",
-            "it": "Il file caricato contiene dati Instagram in formato HTML, ma abbiamo bisogno del formato JSON.",
-            "nl": "Het geüploade bestand bevat Instagram-gegevens in HTML-formaat, maar we hebben JSON-formaat nodig.",
+            "en": "Your Instagram data file is in HTML format, but JSON format is required. To fix this: go back to Meta's 'Download Your Information', make sure to select JSON as the format, then re-download and try again.",
+            "de": "Ihre Instagram-Datendatei ist im HTML-Format, aber das JSON-Format ist erforderlich. Um dies zu beheben: Gehen Sie zurück zu Metas 'Informationen herunterladen', wählen Sie JSON als Format aus, laden Sie die Datei erneut herunter und versuchen Sie es noch einmal.",
+            "it": "Il tuo file di dati Instagram è in formato HTML, ma è richiesto il formato JSON. Per risolvere il problema: torna allo strumento 'Scarica le tue informazioni' di Meta, seleziona JSON come formato, quindi scarica nuovamente e riprova.",
+            "nl": "Uw Instagram-gegevensbestand is in HTML-formaat, maar het JSON-formaat is vereist. Om dit op te lossen: ga terug naar Meta's 'Informatie downloaden', selecteer JSON als formaat, download opnieuw en probeer het opnieuw.",
+            "es": "Su archivo de datos de Instagram está en formato HTML, pero se requiere el formato JSON. Para solucionar esto: vuelva a la herramienta 'Descargar tu información' de Meta, seleccione JSON como formato, vuelva a descargarlo e inténtelo de nuevo.",
+            "ro": "Fișierul dvs. de date Instagram este în format HTML, dar este necesar formatul JSON. Pentru a remedia acest lucru: reveniți la instrumentul 'Descărcați informațiile dvs.' de la Meta, selectați JSON ca format, descărcați din nou și încercați din nou.",
+            "lt": "Jūsų 'Instagram' duomenų failas yra HTML formatu, tačiau reikalingas JSON formatas. Norėdami tai ištaisyti: grįžkite į 'Meta' įrankį 'Atsisiųsti savo informaciją', pasirinkite JSON kaip formatą, tada iš naujo atsisiųskite ir bandykite dar kartą.",
         }
     )
     ok = props.Translatable(
         {
-            "en": "Try again with JSON format",
-            "de": "Erneut mit JSON-Format versuchen",
-            "it": "Riprova con formato JSON",
-            "nl": "Probeer opnieuw met JSON-formaat",
+            "en": "Try again",
+            "de": "Erneut versuchen",
+            "it": "Riprova",
+            "nl": "Probeer opnieuw",
+            "es": "Inténtelo de nuevo",
+            "ro": "Încercați din nou",
+            "lt": "Bandyti dar kartą",
         }
     )
     cancel = props.Translatable(
         {
-            "en": "Cancel",
-            "de": "Abbrechen",
-            "it": "Annulla",
-            "nl": "Annuleren",
+            "en": "Continue",
+            "de": "Weiter",
+            "it": "Continua",
+            "nl": "Verder",
+            "es": "Continuar",
+            "ro": "Continuați",
+            "lt": "Tęsti",
         }
     )
     return props.PropsUIPromptConfirm(text, ok, cancel)
