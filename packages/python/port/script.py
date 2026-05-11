@@ -1,7 +1,9 @@
 import itertools
+import logging
 import port.api.props as props
-from port.api.commands import CommandSystemDonate, CommandUIRender
+from port.api.commands import CommandSystemDonate, CommandUIRender, FlushLogs
 
+import logging
 import pandas as pd
 import zipfile
 import json
@@ -11,16 +13,19 @@ import fnmatch
 from collections import defaultdict, namedtuple
 from contextlib import suppress
 
+# Configure logging for production debugging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
 ##########################
 # Instagram file processing #
 ##########################
 
+MAX_TABLE_ROWS = 50000
+
 filter_start = datetime.datetime.now() - datetime.timedelta(weeks=4 * 6)
 
 datetime_format = "%Y-%m-%d %H:%M:%S"
-
-# Maximum number of rows to include in any table
-MAX_TABLE_ROWS = 50000
 
 i18n_table = {
     "followers": {
@@ -70,39 +75,14 @@ i18n_table = {
         "de": "Anzeigen angesehen",
         "it": "Annunci visualizzati",
         "nl": "Advertenties bekeken"
-    },
-    "posts_published_recent": {
-        "en": "Posts published (past 6 months)",
-        "de": "Veröffentlichte Beiträge (letzte 6 Monate)",
-        "it": "Post pubblicati (ultimi 6 mesi)",
-        "nl": "Gepubliceerde berichten (afgelopen 6 maanden)"
-    },
-    "stories_published_recent": {
-        "en": "Stories published (past 6 months)",
-        "de": "Veröffentlichte Stories (letzte 6 Monate)",
-        "it": "Storie pubblicate (ultimi 6 mesi)",
-        "nl": "Gepubliceerde verhalen (afgelopen 6 maanden)"
-    },
-    "comments_published_recent": {
-        "en": "Comments published (past 6 months)",
-        "de": "Veröffentlichte Kommentare (letzte 6 Monate)",
-        "it": "Commenti pubblicati (ultimi 6 mesi)",
-        "nl": "Gepubliceerde reacties (afgelopen 6 maanden)"
-    },
-    "messages_sent_recent": {
-        "en": "Messages sent (past 6 months)",
-        "de": "Gesendete Nachrichten (letzte 6 Monate)",
-        "it": "Messaggi inviati (ultimi 6 mesi)",
-        "nl": "Verzonden berichten (afgelopen 6 maanden)"
-    },
-    "messages_received_recent": {
-        "en": "Messages received (past 6 months)",
-        "de": "Empfangene Nachrichten (letzte 6 Monate)",
-        "it": "Messaggi ricevuti (ultimi 6 mesi)",
-        "nl": "Ontvangen berichten (afgelopen 6 maanden)"
     }
 }
 
+logger = logging.getLogger(__name__)
+
+
+def donate(key, data):
+    return CommandSystemDonate(key=key, json_string=data)
 
 def get_translated_text(key, locale="en"):
     """
@@ -129,23 +109,28 @@ def parse_datetime(value):
     return uk_timezone.normalize(utc_datetime.astimezone(uk_timezone))
 
 
-def safe_parse_datetime(value):
-    """Parse datetime with error handling for malformed timestamps.
+def get_timestamp(data, *key_path):
+    """Navigate a nested dict path, then parse the leaf value as a timestamp.
 
-    Returns None if the timestamp is invalid (string, negative, out of range).
+    Returns None if any intermediate key is missing, the final value is
+    None, or it isn't a parseable Unix timestamp. Used by the extraction
+    helpers so a malformed record is skipped rather than raising.
     """
+    value = get_in(data, *key_path) if key_path else data
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and value < 0:
+        return None
     try:
-        if not isinstance(value, (int, float)):
-            return None
-        if value < 0:
-            return None
         return parse_datetime(value)
-    except (TypeError, ValueError, OSError):
+    except (TypeError, ValueError, OSError, OverflowError):
         return None
 
 
 def get_in(data_dict, *key_path):
     for k in key_path:
+        if not isinstance(data_dict, dict):
+            return None
         data_dict = data_dict.get(k, None)
         if data_dict is None:
             return None
@@ -195,22 +180,6 @@ def filter_timestamps(timestamps):
         yield timestamp
 
 
-def filter_recent_timestamps(timestamps):
-    """Filter timestamps to only include those from the past 6 months."""
-    # Make filter_start timezone-aware for comparison
-    uk_timezone = pytz.timezone("Europe/London")
-    filter_start_aware = uk_timezone.localize(filter_start)
-
-    for timestamp in timestamps:
-        if timestamp >= filter_start_aware:
-            yield timestamp
-
-
-def count_recent_timestamps(timestamps):
-    """Count timestamps from the past 6 months."""
-    return len(list(filter_recent_timestamps(timestamps)))
-
-
 def get_count_by_date_key(timestamps, key_func):
     """Returns a dict of the form (key, count)
 
@@ -243,12 +212,17 @@ def glob(zipfile, pattern):
 
 
 def glob_json(zipfile, pattern):
-    for name in glob(zipfile, pattern):
+    matching_files = glob(zipfile, pattern)
+    logger.debug(f"glob_json: pattern='{pattern}' found {len(matching_files)} files")
+    for name in matching_files:
+        logger.debug(f"glob_json: processing file '{name}'")
         with zipfile.open(name) as f:
             try:
-                yield json.load(f)
-            except json.JSONDecodeError:
-                print(f"Error decoding JSON from {name}")
+                data = json.load(f)
+                logger.debug(f"glob_json: successfully parsed '{name}'")
+                yield data
+            except json.JSONDecodeError as e:
+                logger.error(f"glob_json: Error decoding JSON from {name}: {e}")
                 raise
 
 # =====================
@@ -283,18 +257,55 @@ def map_to_timeslot(series):
     return series.map(lambda hour: f"{hour}-{hour+1}")
 
 
+def _resolve_event_list(data, key=None):
+    """Return the event list from a source file, tolerating both shapes.
+
+    - Newer shape: top-level list → return it
+    - Legacy shape: dict with the `key` well-known name → return dict[key]
+    - Legacy edge: dict representing a single event → return [data]
+    Returns [] when nothing matches.
+    """
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        if key is not None:
+            value = data.get(key)
+            if isinstance(value, list):
+                return value
+            if isinstance(value, dict):
+                return [value]
+            return []
+        return [data]
+    return []
+
+
+def extract_event_timestamp(item):
+    """Return a parsed timestamp from an event dict across known shapes.
+
+    Tries, in order:
+    1. newer flat shape: item["timestamp"]
+    2. newer flat shape (content): item["creation_timestamp"]
+    3. legacy string_list wrapper: item["string_list_data"][0]["timestamp"]
+    4. legacy string_map wrapper: item["string_map_data"]["Time"]["timestamp"]
+    """
+    if not isinstance(item, dict):
+        return None
+    for flat_key in ("timestamp", "creation_timestamp"):
+        ts = get_timestamp(item, flat_key)
+        if ts is not None:
+            return ts
+    entries = get_in(item, "string_list_data")
+    if isinstance(entries, list) and entries:
+        ts = get_timestamp(entries[0], "timestamp")
+        if ts is not None:
+            return ts
+    return get_timestamp(item, "string_map_data", "Time", "timestamp")
+
+
 def count_items(zipfile, pattern, key=None):
     count = 0
     for data in glob_json(zipfile, pattern):
-        # Some files have dictionary, others a list of dictionaries. Normalize
-        # this to always a list so the rest of the code works regardless.
-        if isinstance(data, dict):
-            data = [data]
-        for item in data:
-            if key is None:
-                count += len(item)
-            else:
-                count += len(item[key])
+        count += len(_resolve_event_list(data, key))
     return count
 
 
@@ -305,44 +316,66 @@ def count_stories(zipfile):
     return len(list(stories_timestamps(zipfile)))
 
 def count_messages(zipfile):
+    logger.debug("count_messages: Starting message count")
     counts = {"sent": 0, "received": 0}
+    conversation_count = 0
     for data in glob_json(zipfile, "*/messages/inbox/**/message_*.json"):
+        conversation_count += 1
         donating_user = get_donating_user(data)
-        for message in data["messages"]:
-            key = "sent" if message["sender_name"] == donating_user else "received"
+        if donating_user is None:
+            logger.debug(f"count_messages: Conversation {conversation_count} has no identifiable donating user, skipping")
+            continue
+        messages = get_in(data, "messages") or []
+        logger.debug(f"count_messages: Conversation {conversation_count} with user '{donating_user}', {len(messages)} messages")
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            key = "sent" if message.get("sender_name") == donating_user else "received"
             counts[key] += 1
-    return counts
-
-
-def count_recent_messages(zipfile):
-    """Count messages sent and received in the past 6 months."""
-    uk_timezone = pytz.timezone("Europe/London")
-    filter_start_aware = uk_timezone.localize(filter_start)
-
-    counts = {"sent": 0, "received": 0}
-    for data in glob_json(zipfile, "*/messages/inbox/**/message_*.json"):
-        donating_user = get_donating_user(data)
-        for message in data["messages"]:
-            timestamp = parse_datetime(message["timestamp_ms"] / 1000)
-            if timestamp >= filter_start_aware:
-                key = "sent" if message["sender_name"] == donating_user else "received"
-                counts[key] += 1
+    logger.debug(f"count_messages: Processed {conversation_count} conversations, sent={counts['sent']}, received={counts['received']}")
     return counts
 
 
 def get_donating_user(data):
-    participants = data["participants"]
-    return participants[len(participants) - 1]["name"]
+    participants = data.get("participants") if isinstance(data, dict) else None
+    if not participants:
+        return None
+    last = participants[-1]
+    if not isinstance(last, dict):
+        return None
+    return last.get("name")
 
 
 def extract_summary_data(zipfile, locale="en"):
-    message_counts = count_messages(zipfile)
-    recent_message_counts = count_recent_messages(zipfile)
+    logger.debug(f"extract_summary_data: Starting with locale='{locale}'")
 
-    # Calculate recent counts (past 6 months)
-    posts_recent = count_recent_timestamps(get_video_posts_timestamps(zipfile))
-    stories_recent = count_recent_timestamps(stories_timestamps(zipfile))
-    comments_recent = count_recent_timestamps(get_post_comments_timestamps(zipfile))
+    logger.debug("extract_summary_data: Counting messages...")
+    message_counts = count_messages(zipfile)
+    logger.debug(f"extract_summary_data: Message counts: sent={message_counts['sent']}, received={message_counts['received']}")
+
+    logger.debug("extract_summary_data: Counting followers...")
+    followers_count = count_items(zipfile, "*/followers_and_following/followers_*.json", "string_list_data")
+    logger.debug(f"extract_summary_data: Followers count: {followers_count}")
+
+    logger.debug("extract_summary_data: Counting following...")
+    following_count = count_items(zipfile, "*/followers_and_following/following.json", "relationships_following")
+    logger.debug(f"extract_summary_data: Following count: {following_count}")
+
+    logger.debug("extract_summary_data: Counting posts...")
+    posts_count = count_posts(zipfile)
+    logger.debug(f"extract_summary_data: Posts count: {posts_count}")
+
+    logger.debug("extract_summary_data: Counting stories...")
+    stories_count = count_stories(zipfile)
+    logger.debug(f"extract_summary_data: Stories count: {stories_count}")
+
+    logger.debug("extract_summary_data: Counting comments...")
+    comments_count = count_items(zipfile, "*/comments/post_comments_*.json")
+    logger.debug(f"extract_summary_data: Comments count: {comments_count}")
+
+    logger.debug("extract_summary_data: Counting ads viewed...")
+    ads_count = count_items(zipfile, "*/ads_and_topics/ads_viewed.json", "impressions_history_ads_seen")
+    logger.debug(f"extract_summary_data: Ads viewed count: {ads_count}")
 
     summary_data = {
         "Description": [
@@ -354,42 +387,19 @@ def extract_summary_data(zipfile, locale="en"):
             get_translated_text("messages_sent", locale),
             get_translated_text("messages_received", locale),
             get_translated_text("ads_viewed", locale),
-            # Recent activity (past 6 months)
-            get_translated_text("posts_published_recent", locale),
-            get_translated_text("stories_published_recent", locale),
-            get_translated_text("comments_published_recent", locale),
-            get_translated_text("messages_sent_recent", locale),
-            get_translated_text("messages_received_recent", locale),
         ],
         "Number": [
-            count_items(
-                zipfile,
-                "*/followers_and_following/followers_*.json",
-                "string_list_data",
-            ),
-            count_items(
-                zipfile,
-                "*/followers_and_following/following.json",
-                "relationships_following",
-            ),
-            count_posts(zipfile),
-            count_stories(zipfile),
-            count_items(zipfile, "*/comments/post_comments_*.json"),
+            followers_count,
+            following_count,
+            posts_count,
+            stories_count,
+            comments_count,
             message_counts["sent"],
             message_counts["received"],
-            count_items(
-                zipfile,
-                "*/ads_and_topics/ads_viewed.json",
-                "impressions_history_ads_seen",
-            ),
-            # Recent activity (past 6 months)
-            posts_recent,
-            stories_recent,
-            comments_recent,
-            recent_message_counts["sent"],
-            recent_message_counts["received"],
+            ads_count,
         ],
     }
+    logger.info(f"extract_summary_data: Summary complete - followers={followers_count}, following={following_count}, posts={posts_count}, stories={stories_count}, comments={comments_count}, msgs_sent={message_counts['sent']}, msgs_recv={message_counts['received']}, ads={ads_count}")
 
     description = props.Translatable(
         {
@@ -436,30 +446,40 @@ def extract_summary_data(zipfile, locale="en"):
     )
 
 
-def extract_direct_message_activity(zipfile, meta_data=None):
-    if meta_data is None:
-        meta_data = []
-
+def extract_direct_message_activity(zipfile):
+    logger.debug("extract_direct_message_activity: Starting extraction")
     counter = itertools.count()
     person_ids = defaultdict(lambda: next(counter))
     sender_ids = []
     timestamps = []
+    conversation_count = 0
+    message_count = 0
+
     for data in glob_json(zipfile, "*/messages/inbox/**/message_*.json"):
-        # Ensure the donating user is the first to get an ID
-        donating_user = get_donating_user(data)
-        person_ids[donating_user]
-        for message in data["messages"]:
-            sender_ids.append(person_ids[message["sender_name"]])
-            timestamps.append(parse_datetime(message["timestamp_ms"] / 1000))
+        conversation_count += 1
+        try:
+            # Ensure the donating user is the first to get an ID
+            donating_user = get_donating_user(data)
+            person_ids[donating_user]
+            conv_messages = data.get("messages", [])
+            logger.debug(f"extract_direct_message_activity: Conversation {conversation_count}, {len(conv_messages)} messages")
+            for message in conv_messages:
+                try:
+                    sender_ids.append(person_ids[message["sender_name"]])
+                    timestamps.append(parse_datetime(message["timestamp_ms"] / 1000))
+                    message_count += 1
+                except Exception as e:
+                    logger.warning(f"extract_direct_message_activity: Error processing message: {e}")
+        except Exception as e:
+            logger.warning(f"extract_direct_message_activity: Error processing conversation {conversation_count}: {e}")
+
+    logger.info(f"extract_direct_message_activity: Processed {conversation_count} conversations, {message_count} messages total")
+
     df = pd.DataFrame({"Anonymous ID": sender_ids, "Sent": timestamps})
     df["Sent"] = pd.to_datetime(df["Sent"]).dt.strftime("%Y-%m-%d %H:%M")
     # Sort by sent time (newest first)
     df = df.sort_values(by=["Sent"], ascending=False).reset_index(drop=True)
-
-    # Limit to MAX_TABLE_ROWS
-    if len(df) > MAX_TABLE_ROWS:
-        meta_data.append(("info", f"Direct message activity: Limited to {MAX_TABLE_ROWS} most recent items (out of {len(df)} total)"))
-        df = df.head(MAX_TABLE_ROWS)
+    logger.debug(f"extract_direct_message_activity: DataFrame created with {len(df)} rows")
 
     description = props.Translatable(
         {
@@ -542,14 +562,24 @@ def extract_direct_message_activity(zipfile, meta_data=None):
 def flatten_media(media):
     if isinstance(media, list):
         for item in media:
-            yield from item["media"]
+            if not isinstance(item, dict):
+                continue
+            nested = item.get("media")
+            if isinstance(nested, list):
+                # Legacy shape: media entries live in a nested "media" list.
+                yield from nested
+            else:
+                # Newer flat shape: the post itself carries the timestamp.
+                yield item
     else:
         yield media
 
 
 def get_creation_timestamps(items):
     for item in items:
-        yield parse_datetime(item["creation_timestamp"])
+        ts = extract_event_timestamp(item)
+        if ts is not None:
+            yield ts
 
 
 def get_media_creation_timestamps(items):
@@ -557,21 +587,24 @@ def get_media_creation_timestamps(items):
 
 
 def get_content_posts_timestamps(zipfile):
-    # Path: */content/posts_*.json
-    for data in glob_json(zipfile, "*/content/posts_*.json"):
+    # Both legacy `*/content/posts_*.json` and newer
+    # `your_instagram_activity/media/posts_*.json` yield via the same
+    # flatten_media + get_creation_timestamps pipeline, which now handles:
+    #   - legacy post entries wrapping media[].creation_timestamp
+    #   - newer flat post entries with creation_timestamp/timestamp at root
+    for pattern in ("*/content/posts_*.json",
+                    "your_instagram_activity/media/posts_*.json"):
+        for data in glob_json(zipfile, pattern):
+            yield from get_media_creation_timestamps(data)
 
-        yield from get_media_creation_timestamps(data)
-    # Path: your_instagram_activity/media/posts_*.json
-    for data in glob_json(zipfile, "your_instagram_activity/media/posts_*.json"):
-        for post in data:
-            for media in post["media"]:
-                yield parse_datetime(media["creation_timestamp"])
-                break
 
-
-def get_media_timestamps(zipfile, pattern, key):
-    for data in glob_json(zipfile, pattern):
-        yield from get_media_creation_timestamps(data[key])
+def get_media_timestamps(zipfile, patterns, key):
+    if isinstance(patterns, str):
+        patterns = (patterns,)
+    for pattern in patterns:
+        for data in glob_json(zipfile, pattern):
+            items = _resolve_event_list(data, key)
+            yield from get_media_creation_timestamps(items)
 
 
 def df_from_timestamps(timestamps, column):
@@ -584,15 +617,16 @@ def df_from_timestamps(timestamps, column):
 
 
 def stories_timestamps(zipfile):
-    # Path: */content/stories.json
-    for data in glob_json(zipfile, "*/content/stories.json"):
-        for item in data["ig_stories"]:
-            yield parse_datetime(item["creation_timestamp"])
-
-    # Path: your_instagram_activity/media/stories.json
-    for data in glob_json(zipfile, "your_instagram_activity/media/stories.json"):
-        for item in data["ig_stories"]:
-            yield parse_datetime(item["creation_timestamp"])
+    patterns = (
+        "*/content/stories.json",
+        "your_instagram_activity/media/stories.json",
+    )
+    for pattern in patterns:
+        for data in glob_json(zipfile, pattern):
+            # Legacy: {"ig_stories": [...]}.  Newer (hypothetical): top-level list.
+            yield from get_creation_timestamps(
+                _resolve_event_list(data, "ig_stories")
+            )
             
 
 def df_from_timestamp_columns(a, b):
@@ -625,24 +659,37 @@ def df_from_timestamp_columns(a, b):
 def get_video_posts_timestamps(zipfile):
     return itertools.chain(
         get_content_posts_timestamps(zipfile),
-        get_media_timestamps(zipfile, "*/content/igtv_videos.json", "ig_igtv_media"),
-        get_media_timestamps(zipfile, "*/content/reels.json", "ig_reels_media"),
+        get_media_timestamps(
+            zipfile,
+            ("*/content/igtv_videos.json",
+             "your_instagram_activity/media/igtv_videos.json"),
+            "ig_igtv_media",
+        ),
+        get_media_timestamps(
+            zipfile,
+            ("*/content/reels.json",
+             "your_instagram_activity/media/reels.json"),
+            "ig_reels_media",
+        ),
     )
 
 
-def extract_video_posts(zipfile, meta_data=None):
-    if meta_data is None:
-        meta_data = []
+def extract_video_posts(zipfile):
+    logger.debug("extract_video_posts: Starting extraction")
+    logger.debug("extract_video_posts: Getting video timestamps...")
+    video_timestamps = list(get_video_posts_timestamps(zipfile))
+    logger.debug(f"extract_video_posts: Found {len(video_timestamps)} video timestamps")
 
-    video_timestamps = get_video_posts_timestamps(zipfile)
+    logger.debug("extract_video_posts: Getting stories timestamps...")
+    story_timestamps = list(stories_timestamps(zipfile))
+    logger.debug(f"extract_video_posts: Found {len(story_timestamps)} story timestamps")
+
+    logger.info(f"extract_video_posts: Total videos={len(video_timestamps)}, stories={len(story_timestamps)}")
+
     df = df_from_timestamp_columns(
-        (video_timestamps, "Videos"), (stories_timestamps(zipfile), "Stories")
+        (iter(video_timestamps), "Videos"), (iter(story_timestamps), "Stories")
     )
-
-    # Limit to MAX_TABLE_ROWS
-    if len(df) > MAX_TABLE_ROWS:
-        meta_data.append(("info", f"Posts: Limited to {MAX_TABLE_ROWS} most recent items (out of {len(df)} total)"))
-        df = df.head(MAX_TABLE_ROWS)
+    logger.debug(f"extract_video_posts: DataFrame created with {len(df)} rows")
 
     description = props.Translatable(
         {
@@ -754,33 +801,19 @@ def get_post_comments_timestamps(zipfile):
 
 
 def get_string_map_timestamps(zipfile, pattern, key=None):
+    # Shape-agnostic: tries flat + legacy nested shapes per event.
     for data in glob_json(zipfile, pattern):
-        # Handle both nested format (dict with wrapper key) and flat format (list at top level)
-        if key is not None and isinstance(data, dict) and key in data:
-            data = data[key]
-        if isinstance(data, list):
-            for item in data:
-                # Flat format: timestamp directly on item
-                if "timestamp" in item:
-                    yield parse_datetime(item["timestamp"])
-                # Nested format: in string_map_data.Time.timestamp
-                elif "string_map_data" in item:
-                    yield parse_datetime(item["string_map_data"]["Time"]["timestamp"])
-        else:
-            # Nested format: single object with string_map_data
-            if "string_map_data" in data:
-                yield parse_datetime(data["string_map_data"]["Time"]["timestamp"])
-            elif "timestamp" in data:
-                yield parse_datetime(data["timestamp"])
-
+        for item in _resolve_event_list(data, key):
+            ts = extract_event_timestamp(item)
+            if ts is not None:
+                yield ts
 
 
 def get_string_list_timestamps(zipfile, pattern, key=None):
-    for data in glob_json(zipfile, pattern):
-        if key is not None:
-            data = data[key]
-        for item in data:
-            yield parse_datetime(item["string_list_data"][0]["timestamp"])
+    # Shape-agnostic — same logic as get_string_map_timestamps. The
+    # two historically distinguished which nested wrapper to expect;
+    # extract_event_timestamp now tries both plus the newer flat shape.
+    yield from get_string_map_timestamps(zipfile, pattern, key)
 
 
 def get_likes_timestamps(zipfile):
@@ -794,20 +827,23 @@ def get_likes_timestamps(zipfile):
     )
 
 
-def extract_comments_and_likes(zipfile, meta_data=None):
-    if meta_data is None:
-        meta_data = []
+def extract_comments_and_likes(zipfile):
+    logger.debug("extract_comments_and_likes: Starting extraction")
 
-    comment_timestamps = get_post_comments_timestamps(zipfile)
-    likes_timestamps = get_likes_timestamps(zipfile)
+    logger.debug("extract_comments_and_likes: Getting comment timestamps...")
+    comment_timestamps = list(get_post_comments_timestamps(zipfile))
+    logger.debug(f"extract_comments_and_likes: Found {len(comment_timestamps)} comment timestamps")
+
+    logger.debug("extract_comments_and_likes: Getting likes timestamps...")
+    likes_timestamps = list(get_likes_timestamps(zipfile))
+    logger.debug(f"extract_comments_and_likes: Found {len(likes_timestamps)} likes timestamps")
+
+    logger.info(f"extract_comments_and_likes: Total comments={len(comment_timestamps)}, likes={len(likes_timestamps)}")
+
     df = df_from_timestamp_columns(
-        (comment_timestamps, "Comments"), (likes_timestamps, "Likes")
+        (iter(comment_timestamps), "Comments"), (iter(likes_timestamps), "Likes")
     )
-
-    # Limit to MAX_TABLE_ROWS
-    if len(df) > MAX_TABLE_ROWS:
-        meta_data.append(("info", f"Comments and likes: Limited to {MAX_TABLE_ROWS} most recent items (out of {len(df)} total)"))
-        df = df.head(MAX_TABLE_ROWS)
+    logger.debug(f"extract_comments_and_likes: DataFrame created with {len(df)} rows")
 
     description = props.Translatable(
         {
@@ -915,33 +951,32 @@ def extract_comments_and_likes(zipfile, meta_data=None):
     )
 
 
-def extract_viewed(zipfile, meta_data=None):
-    if meta_data is None:
-        meta_data = []
+def extract_viewed(zipfile):
+    logger.debug("extract_viewed: Starting extraction")
+
+    logger.debug("extract_viewed: Getting videos watched timestamps...")
+    videos_watched = list(get_string_map_timestamps(
+        zipfile,
+        "*/ads_and_topics/videos_watched.json",
+        "impressions_history_videos_watched",
+    ))
+    logger.debug(f"extract_viewed: Found {len(videos_watched)} videos watched timestamps")
+
+    logger.debug("extract_viewed: Getting posts viewed timestamps...")
+    posts_viewed = list(get_string_map_timestamps(
+        zipfile,
+        "*/ads_and_topics/posts_viewed.json",
+        "impressions_history_posts_seen",
+    ))
+    logger.debug(f"extract_viewed: Found {len(posts_viewed)} posts viewed timestamps")
+
+    logger.info(f"extract_viewed: Total videos_watched={len(videos_watched)}, posts_viewed={len(posts_viewed)}")
 
     df = df_from_timestamp_columns(
-        (
-            get_string_map_timestamps(
-                zipfile,
-                "*/ads_and_topics/videos_watched.json",
-                "impressions_history_videos_watched",
-            ),
-            "Videos",
-        ),
-        (
-            get_string_map_timestamps(
-                zipfile,
-                "*/ads_and_topics/posts_viewed.json",
-                "impressions_history_posts_seen",
-            ),
-            "Posts",
-        ),
+        (iter(videos_watched), "Videos"),
+        (iter(posts_viewed), "Posts"),
     )
-
-    # Limit to MAX_TABLE_ROWS
-    if len(df) > MAX_TABLE_ROWS:
-        meta_data.append(("info", f"Viewed: Limited to {MAX_TABLE_ROWS} most recent items (out of {len(df)} total)"))
-        df = df.head(MAX_TABLE_ROWS)
+    logger.debug(f"extract_viewed: DataFrame created with {len(df)} rows")
 
     description = props.Translatable(
         {
@@ -1070,7 +1105,7 @@ def extract_saved_posts(zipfile, meta_data=None):
                 author = name_data.get("value", "")
                 url = name_data.get("href", "")
                 timestamp = get_in(string_map, "Added Time", "timestamp")
-                dt = safe_parse_datetime(timestamp)
+                dt = get_timestamp(timestamp)
                 if dt:
                     rows.append({
                         "Date and time": dt.strftime(datetime_format),
@@ -1087,7 +1122,7 @@ def extract_saved_posts(zipfile, meta_data=None):
             saved_on = get_dict(string_map, "Saved on")
             url = saved_on.get("href", "")
             timestamp = saved_on.get("timestamp")
-            dt = safe_parse_datetime(timestamp)
+            dt = get_timestamp(timestamp)
             if dt:
                 rows.append({
                     "Date and time": dt.strftime(datetime_format),
@@ -1161,7 +1196,7 @@ def extract_liked_posts(zipfile, meta_data=None):
                 first_item = string_list[0]
                 url = first_item.get("href", "")
                 timestamp = first_item.get("timestamp")
-                dt = safe_parse_datetime(timestamp)
+                dt = get_timestamp(timestamp)
                 if dt:
                     rows.append({
                         "Date and time": dt.strftime(datetime_format),
@@ -1231,7 +1266,7 @@ def extract_liked_comments(zipfile, meta_data=None):
                 first_item = string_list[0]
                 url = first_item.get("href", "")
                 timestamp = first_item.get("timestamp")
-                dt = safe_parse_datetime(timestamp)
+                dt = get_timestamp(timestamp)
                 if dt:
                     rows.append({
                         "Date and time": dt.strftime(datetime_format),
@@ -1306,26 +1341,105 @@ def is_html_format(zipfile):
     return has_html and not has_json_data
 
 
-def extract_data(path, locale="en", meta_data=None):
-    if meta_data is None:
-        meta_data = []
+def extract_data(path, locale="en"):
+    """Generator that extracts data and yields FlushLogs to send logs incrementally."""
+    logger.info(f"extract_data: Starting extraction with locale='{locale}'")
+    logger.debug(f"extract_data: Opening zip file from path type={type(path)}")
+    yield FlushLogs
 
-    zfile = zipfile.ZipFile(path)
+    try:
+        zfile = zipfile.ZipFile(path)
+        logger.info(f"extract_data: Zip file opened, contains {len(zfile.namelist())} files")
+        logger.debug(f"extract_data: Files in zip: {zfile.namelist()[:20]}...")  # First 20 files
+    except Exception as e:
+        logger.error(f"extract_data: Failed to open zip file: {e}")
+        raise
 
     # Check if this is an HTML format export
+    logger.debug("extract_data: Checking for HTML format")
     if is_html_format(zfile):
+        logger.error("extract_data: HTML format detected, raising error")
         raise HtmlFormatError("Instagram data export is in HTML format, JSON format is required")
 
-    return [
-        extract_summary_data(zfile, locale),
-        extract_video_posts(zfile, meta_data),
-        extract_comments_and_likes(zfile, meta_data),
-        extract_viewed(zfile, meta_data),
-        extract_direct_message_activity(zfile, meta_data),
-        extract_saved_posts(zfile, meta_data),
-        extract_liked_posts(zfile, meta_data),
-        extract_liked_comments(zfile, meta_data),
-    ]
+    yield FlushLogs
+    results = []
+    meta_data = []
+
+    logger.debug("extract_data: Extracting summary data...")
+    try:
+        results.append(extract_summary_data(zfile, locale))
+        logger.info("extract_data: Summary data extracted successfully")
+        yield FlushLogs
+    except Exception as e:
+        logger.error(f"extract_data: Failed to extract summary data: {e}", exc_info=True)
+        raise
+
+    logger.debug("extract_data: Extracting video posts...")
+    try:
+        results.append(extract_video_posts(zfile))
+        logger.info("extract_data: Video posts extracted successfully")
+        yield FlushLogs
+    except Exception as e:
+        logger.error(f"extract_data: Failed to extract video posts: {e}", exc_info=True)
+        raise
+
+    logger.debug("extract_data: Extracting comments and likes...")
+    try:
+        results.append(extract_comments_and_likes(zfile))
+        logger.info("extract_data: Comments and likes extracted successfully")
+        yield FlushLogs
+    except Exception as e:
+        logger.error(f"extract_data: Failed to extract comments and likes: {e}", exc_info=True)
+        raise
+
+    logger.debug("extract_data: Extracting viewed content...")
+    try:
+        results.append(extract_viewed(zfile))
+        logger.info("extract_data: Viewed content extracted successfully")
+        yield FlushLogs
+    except Exception as e:
+        logger.error(f"extract_data: Failed to extract viewed content: {e}", exc_info=True)
+        raise
+
+    logger.debug("extract_data: Extracting direct message activity...")
+    try:
+        results.append(extract_direct_message_activity(zfile))
+        logger.info("extract_data: Direct message activity extracted successfully")
+        yield FlushLogs
+    except Exception as e:
+        logger.error(f"extract_data: Failed to extract direct message activity: {e}", exc_info=True)
+        raise
+
+
+    logger.debug("extract_data: Extracting saved posts...")
+    try:
+        results.append(extract_saved_posts(zfile, meta_data))
+        logger.info("extract_data: Saved posts extracted successfully")
+        yield FlushLogs
+    except Exception as e:
+        logger.error(f"extract_data: Failed to extract saved posts: {e}", exc_info=True)
+        raise
+
+    logger.debug("extract_data: Extracting liked posts...")
+    try:
+        results.append(extract_liked_posts(zfile, meta_data))
+        logger.info("extract_data: Liked posts extracted successfully")
+        yield FlushLogs
+    except Exception as e:
+        logger.error(f"extract_data: Failed to extract liked posts: {e}", exc_info=True)
+        raise
+
+    logger.debug("extract_data: Extracting liked comments...")
+    try:
+        results.append(extract_liked_comments(zfile, meta_data))
+        logger.info("extract_data: Liked comments extracted successfully")
+        yield FlushLogs
+    except Exception as e:
+        logger.error(f"extract_data: Failed to extract liked comments: {e}", exc_info=True)
+        raise
+
+    logger.info(f"extract_data: Extraction complete, returning {len(results)} results")
+    yield results
 
 
 ######################
@@ -1349,6 +1463,7 @@ class HtmlFormatError(Exception):
 
 class DataDonationProcessor:
     def __init__(self, platform, mime_types, extractor, session_id, locale="en"):
+        logger.info(f"DataDonationProcessor: Initializing for platform='{platform}', session_id='{session_id}', locale='{locale}'")
         self.platform = platform
         self.mime_types = mime_types
         self.extractor = extractor
@@ -1358,35 +1473,52 @@ class DataDonationProcessor:
         self.meta_data = []
 
     def process(self):
+        logger.info(f"DataDonationProcessor.process: Starting donation flow for {self.platform}")
         with suppress(SkipToNextStep):
             while True:
+                logger.debug("DataDonationProcessor.process: Prompting for file...")
                 file_result = yield from self.prompt_file()
+                logger.info(f"DataDonationProcessor.process: File received, type={type(file_result)}")
 
                 self.log(f"extracting file")
+                logger.info("DataDonationProcessor.process: Starting file extraction...")
                 try:
-                    extraction_result = self.extract_data(file_result.value)
-                except (IOError, zipfile.BadZipFile):
+                    extraction_result = yield from self.extract_data(file_result.value)
+                    logger.info(f"DataDonationProcessor.process: Extraction returned {len(extraction_result) if extraction_result else 0} results")
+                except (IOError, zipfile.BadZipFile) as e:
+                    logger.error(f"DataDonationProcessor.process: IOError/BadZipFile: {e}", exc_info=True)
                     self.log(f"prompt confirmation to retry file selection")
                     try_again = yield from self.prompt_retry()
                     if try_again:
+                        logger.info("DataDonationProcessor.process: User chose to retry")
                         continue
+                    logger.info("DataDonationProcessor.process: User declined retry, ending")
                     return
-                except HtmlFormatError:
+                except HtmlFormatError as e:
+                    logger.error(f"DataDonationProcessor.process: HtmlFormatError: {e}")
                     self.log(f"HTML format detected - prompting for retry with instructions")
                     try_again = yield from self.prompt_html_format_retry()
                     if try_again:
+                        logger.info("DataDonationProcessor.process: User chose to retry after HTML format error")
                         continue
+                    logger.info("DataDonationProcessor.process: User declined retry after HTML format, ending")
                     yield donate(f"{self.session_id}-html-format-attempt", '[{ "message": "HTML format upload attempted" }]')
                     return
+                except Exception as e:
+                    logger.error(f"DataDonationProcessor.process: Unexpected error during extraction: {e}", exc_info=True)
+                    raise
                 else:
                     if extraction_result is None:
+                        logger.warning("DataDonationProcessor.process: extraction_result is None")
                         try_again = yield from self.prompt_retry()
                         if try_again:
                             continue
                         else:
                             return
                     self.log(f"extraction successful, go to consent form")
+                    logger.info(f"DataDonationProcessor.process: Extraction successful, showing consent form with {len(extraction_result)} tables")
                     yield from self.prompt_consent(extraction_result)
+                    logger.info("DataDonationProcessor.process: Consent form completed")
                     return
 
     def prompt_retry(self):
@@ -1421,7 +1553,14 @@ class DataDonationProcessor:
         self.meta_data.append(("debug", f"{self.platform}: {message}"))
 
     def extract_data(self, file):
-        return self.extractor(file, self.locale)
+        """Run extractor generator, forwarding FlushLogs and returning final result."""
+        result = None
+        for item in self.extractor(file, self.locale):
+            if item is FlushLogs:
+                yield FlushLogs
+            else:
+                result = item
+        return result
 
     def prompt_consent(self, data):
         log_title = props.Translatable(
@@ -1499,11 +1638,14 @@ class DataDonation:
 data_donation = DataDonation("Instagram", "application/zip", extract_data)
 
 
-def process(data):
-    session_id = data.get("sessionId")
-    locale = data.get("locale", "en")
+def process(session_id):
+    logger.info(f"process: Starting Instagram data donation process, session_id='{session_id}'")
+    locale = "en"  # Default locale
+    logger.debug(f"process: Using locale='{locale}'")
     yield donate(f"{session_id}-tracking", '[{ "message": "user entered script" }]')
+    logger.debug("process: Tracking donation sent, starting data donation flow...")
     yield from data_donation(session_id, locale)
+    logger.info("process: Data donation flow completed")
 
 
 def render_donation_page(platform, body):
@@ -1513,7 +1655,10 @@ def render_donation_page(platform, body):
                 "en": platform,
                 "de": platform,
                 "it": platform,
+                "es": platform,
                 "nl": platform,
+                "ro": platform,
+                "lt": platform,
             }
         )
     )
@@ -1527,7 +1672,10 @@ def retry_confirmation(platform):
             "en": f"Unfortunately, we cannot process your data. Please make sure that you selected a zip file, and JSON as a file format when downloading your data from Instagram.",
             "de": f"Leider können wir Ihre Daten nicht verarbeiten. Bitte stellen Sie sicher, dass Sie eine ZIP-Datei und JSON als Dateiformat ausgewählt haben, als Sie Ihre Daten von Instagram heruntergeladen haben.",
             "it": f"Purtroppo non possiamo elaborare i tuoi dati. Assicurati di aver selezionato un file ZIP e il formato JSON quando hai scaricato i dati da Instagram.",
+            "es": "Lamentablemente, no podemos procesar su archivo. Continúe si está seguro de que ha seleccionado el archivo correcto. Intente seleccionar un archivo diferente.",
             "nl": f"Helaas kunnen we uw gegevens niet verwerken. Zorg ervoor dat u een ZIP-bestand en JSON als bestandsformaat hebt geselecteerd bij het downloaden van uw gegevens van Instagram.",
+            "ro": "Din păcate, nu putem procesa fișierul dvs. Continuați dacă sunteți sigur că ați selectat fișierul corect. Încercați din nou pentru a selecta un fișier diferit.",
+            "lt": "Deja, negalime apdoroti jūsų failo. Tęskite, jei esate tikri, kad pasirinkote tinkamą failą. Bandykite dar kartą pasirinkti kitą failą.",
         }
     )
     ok = props.Translatable(
@@ -1536,6 +1684,8 @@ def retry_confirmation(platform):
             "de": "Erneut versuchen",
             "it": "Riprova",
             "nl": "Probeer opnieuw",
+            "ro": "Încercați din nou",
+            "lt": "Bandykite dar kartą",
         }
     )
     cancel = props.Translatable(
@@ -1543,7 +1693,10 @@ def retry_confirmation(platform):
             "en": "Continue",
             "de": "Weiter",
             "it": "Continua",
+            "es": "Continuar",
             "nl": "Verder",
+            "ro": "Continuați",
+            "lt": "Tęsti",
         }
     )
     return props.PropsUIPromptConfirm(text, ok, cancel)
@@ -1584,6 +1737,9 @@ def prompt_consent(id, data, meta_data):
             "de": "Inhalt der ZIP-Datei",
             "it": "Contenuto del file ZIP",
             "nl": "Inhoud zipbestand",
+            "es": "Contenido del archivo ZIP",
+            "ro": "Conținutul fișierului ZIP",
+            "lt": "ZIP failo turinys",
         }
     )
     log_title = props.Translatable(
@@ -1613,6 +1769,11 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) > 1:
-        print(extract_data(sys.argv[1]))
+        # extract_data is now a generator, consume it to get results
+        result = None
+        for item in extract_data(sys.argv[1]):
+            if item is not FlushLogs:
+                result = item
+        print(result)
     else:
         print("please provide a zip file as argument")
