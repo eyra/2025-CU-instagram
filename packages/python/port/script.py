@@ -1363,78 +1363,27 @@ def extract_data(path, locale="en"):
     results = []
     meta_data = []
 
-    logger.debug("extract_data: Extracting summary data...")
-    try:
-        results.append(extract_summary_data(zfile, locale))
-        logger.info("extract_data: Summary data extracted successfully")
-        yield FlushLogs
-    except Exception as e:
-        logger.error(f"extract_data: Failed to extract summary data: {e}", exc_info=True)
-        raise
+    extractors = [
+        ("summary data",            lambda: extract_summary_data(zfile, locale)),
+        ("video posts",             lambda: extract_video_posts(zfile)),
+        ("comments and likes",      lambda: extract_comments_and_likes(zfile)),
+        ("viewed content",          lambda: extract_viewed(zfile)),
+        ("direct message activity", lambda: extract_direct_message_activity(zfile)),
+        ("saved posts",             lambda: extract_saved_posts(zfile, meta_data)),
+        ("liked posts",             lambda: extract_liked_posts(zfile, meta_data)),
+        ("liked comments",          lambda: extract_liked_comments(zfile, meta_data)),
+    ]
 
-    logger.debug("extract_data: Extracting video posts...")
-    try:
-        results.append(extract_video_posts(zfile))
-        logger.info("extract_data: Video posts extracted successfully")
-        yield FlushLogs
-    except Exception as e:
-        logger.error(f"extract_data: Failed to extract video posts: {e}", exc_info=True)
-        raise
-
-    logger.debug("extract_data: Extracting comments and likes...")
-    try:
-        results.append(extract_comments_and_likes(zfile))
-        logger.info("extract_data: Comments and likes extracted successfully")
-        yield FlushLogs
-    except Exception as e:
-        logger.error(f"extract_data: Failed to extract comments and likes: {e}", exc_info=True)
-        raise
-
-    logger.debug("extract_data: Extracting viewed content...")
-    try:
-        results.append(extract_viewed(zfile))
-        logger.info("extract_data: Viewed content extracted successfully")
-        yield FlushLogs
-    except Exception as e:
-        logger.error(f"extract_data: Failed to extract viewed content: {e}", exc_info=True)
-        raise
-
-    logger.debug("extract_data: Extracting direct message activity...")
-    try:
-        results.append(extract_direct_message_activity(zfile))
-        logger.info("extract_data: Direct message activity extracted successfully")
-        yield FlushLogs
-    except Exception as e:
-        logger.error(f"extract_data: Failed to extract direct message activity: {e}", exc_info=True)
-        raise
-
-
-    logger.debug("extract_data: Extracting saved posts...")
-    try:
-        results.append(extract_saved_posts(zfile, meta_data))
-        logger.info("extract_data: Saved posts extracted successfully")
-        yield FlushLogs
-    except Exception as e:
-        logger.error(f"extract_data: Failed to extract saved posts: {e}", exc_info=True)
-        raise
-
-    logger.debug("extract_data: Extracting liked posts...")
-    try:
-        results.append(extract_liked_posts(zfile, meta_data))
-        logger.info("extract_data: Liked posts extracted successfully")
-        yield FlushLogs
-    except Exception as e:
-        logger.error(f"extract_data: Failed to extract liked posts: {e}", exc_info=True)
-        raise
-
-    logger.debug("extract_data: Extracting liked comments...")
-    try:
-        results.append(extract_liked_comments(zfile, meta_data))
-        logger.info("extract_data: Liked comments extracted successfully")
-        yield FlushLogs
-    except Exception as e:
-        logger.error(f"extract_data: Failed to extract liked comments: {e}", exc_info=True)
-        raise
+    for name, fn in extractors:
+        logger.debug(f"extract_data: Extracting {name}...")
+        try:
+            results.append(fn())
+            logger.info(f"extract_data: {name} extracted successfully")
+            yield FlushLogs
+        except Exception as e:
+            logger.error(f"extract_data: Failed to extract {name}: {e}", exc_info=True)
+            yield FlushLogs
+            raise
 
     logger.info(f"extract_data: Extraction complete, returning {len(results)} results")
     yield results
