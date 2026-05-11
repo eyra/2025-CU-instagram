@@ -16,7 +16,16 @@ sys.modules['js'] = MagicMock()
 # Add the port package to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from port.script import extract_data
+from port.script import extract_data, extract_saved_posts, extract_liked_posts, extract_liked_comments
+from port.api.commands import FlushLogs
+
+
+def _run(zip_path):
+    results = None
+    for item in extract_data(zip_path, "en"):
+        if item is not FlushLogs:
+            results = item
+    return results
 
 
 def create_test_zip_with_saved_posts():
@@ -283,7 +292,7 @@ class TestSavedPostsTable:
     def test_saved_posts_table_exists(self):
         """Test that saved posts table is generated"""
         test_zip = create_test_zip_with_saved_posts()
-        results = extract_data(test_zip, "en")
+        results = _run(test_zip)
 
         saved_posts_table = next((r for r in results if r.id == "instagram_saved_posts"), None)
         assert saved_posts_table is not None, "Saved posts table should exist"
@@ -291,7 +300,7 @@ class TestSavedPostsTable:
     def test_saved_posts_has_correct_columns(self):
         """Test that saved posts table has the correct columns"""
         test_zip = create_test_zip_with_saved_posts()
-        results = extract_data(test_zip, "en")
+        results = _run(test_zip)
 
         saved_posts_table = next((r for r in results if r.id == "instagram_saved_posts"), None)
         assert saved_posts_table is not None
@@ -303,7 +312,7 @@ class TestSavedPostsTable:
     def test_saved_posts_count(self):
         """Test that saved posts table has correct number of rows"""
         test_zip = create_test_zip_with_saved_posts()
-        results = extract_data(test_zip, "en")
+        results = _run(test_zip)
 
         saved_posts_table = next((r for r in results if r.id == "instagram_saved_posts"), None)
         assert saved_posts_table is not None
@@ -315,7 +324,7 @@ class TestSavedPostsTable:
     def test_saved_posts_collection_assignment(self):
         """Test that posts in collections have correct collection name"""
         test_zip = create_test_zip_with_saved_posts()
-        results = extract_data(test_zip, "en")
+        results = _run(test_zip)
 
         saved_posts_table = next((r for r in results if r.id == "instagram_saved_posts"), None)
         df = saved_posts_table.data_frame
@@ -334,7 +343,7 @@ class TestSavedPostsTable:
     def test_saved_posts_authors(self):
         """Test that authors are correctly extracted"""
         test_zip = create_test_zip_with_saved_posts()
-        results = extract_data(test_zip, "en")
+        results = _run(test_zip)
 
         saved_posts_table = next((r for r in results if r.id == "instagram_saved_posts"), None)
         df = saved_posts_table.data_frame
@@ -350,7 +359,7 @@ class TestLikedPostsTable:
     def test_liked_posts_table_exists(self):
         """Test that liked posts table is generated"""
         test_zip = create_test_zip_with_liked_posts()
-        results = extract_data(test_zip, "en")
+        results = _run(test_zip)
 
         liked_posts_table = next((r for r in results if r.id == "instagram_liked_posts"), None)
         assert liked_posts_table is not None, "Liked posts table should exist"
@@ -358,7 +367,7 @@ class TestLikedPostsTable:
     def test_liked_posts_has_correct_columns(self):
         """Test that liked posts table has the correct columns"""
         test_zip = create_test_zip_with_liked_posts()
-        results = extract_data(test_zip, "en")
+        results = _run(test_zip)
 
         liked_posts_table = next((r for r in results if r.id == "instagram_liked_posts"), None)
         assert liked_posts_table is not None
@@ -370,7 +379,7 @@ class TestLikedPostsTable:
     def test_liked_posts_count(self):
         """Test that liked posts table has correct number of rows"""
         test_zip = create_test_zip_with_liked_posts()
-        results = extract_data(test_zip, "en")
+        results = _run(test_zip)
 
         liked_posts_table = next((r for r in results if r.id == "instagram_liked_posts"), None)
         assert liked_posts_table is not None
@@ -381,7 +390,7 @@ class TestLikedPostsTable:
     def test_liked_posts_authors(self):
         """Test that authors are correctly extracted"""
         test_zip = create_test_zip_with_liked_posts()
-        results = extract_data(test_zip, "en")
+        results = _run(test_zip)
 
         liked_posts_table = next((r for r in results if r.id == "instagram_liked_posts"), None)
         df = liked_posts_table.data_frame
@@ -393,7 +402,7 @@ class TestLikedPostsTable:
     def test_liked_posts_urls(self):
         """Test that URLs are correctly extracted"""
         test_zip = create_test_zip_with_liked_posts()
-        results = extract_data(test_zip, "en")
+        results = _run(test_zip)
 
         liked_posts_table = next((r for r in results if r.id == "instagram_liked_posts"), None)
         df = liked_posts_table.data_frame
@@ -410,7 +419,7 @@ class TestLikedCommentsTable:
     def test_liked_comments_table_exists(self):
         """Test that liked comments table is generated"""
         test_zip = create_test_zip_with_liked_comments()
-        results = extract_data(test_zip, "en")
+        results = _run(test_zip)
 
         liked_comments_table = next((r for r in results if r.id == "instagram_liked_comments"), None)
         assert liked_comments_table is not None, "Liked comments table should exist"
@@ -418,7 +427,7 @@ class TestLikedCommentsTable:
     def test_liked_comments_has_correct_columns(self):
         """Test that liked comments table has the correct columns"""
         test_zip = create_test_zip_with_liked_comments()
-        results = extract_data(test_zip, "en")
+        results = _run(test_zip)
 
         liked_comments_table = next((r for r in results if r.id == "instagram_liked_comments"), None)
         assert liked_comments_table is not None
@@ -430,7 +439,7 @@ class TestLikedCommentsTable:
     def test_liked_comments_count(self):
         """Test that liked comments table has correct number of rows"""
         test_zip = create_test_zip_with_liked_comments()
-        results = extract_data(test_zip, "en")
+        results = _run(test_zip)
 
         liked_comments_table = next((r for r in results if r.id == "instagram_liked_comments"), None)
         assert liked_comments_table is not None
@@ -441,7 +450,7 @@ class TestLikedCommentsTable:
     def test_liked_comments_authors(self):
         """Test that authors are correctly extracted"""
         test_zip = create_test_zip_with_liked_comments()
-        results = extract_data(test_zip, "en")
+        results = _run(test_zip)
 
         liked_comments_table = next((r for r in results if r.id == "instagram_liked_comments"), None)
         df = liked_comments_table.data_frame
@@ -457,7 +466,7 @@ class TestAllNewTables:
     def test_all_new_tables_present(self):
         """Test that all three new tables are generated"""
         test_zip = create_test_zip_with_all_new_tables()
-        results = extract_data(test_zip, "en")
+        results = _run(test_zip)
 
         result_ids = [r.id for r in results]
 
@@ -468,7 +477,7 @@ class TestAllNewTables:
     def test_new_tables_have_titles(self):
         """Test that new tables have proper titles"""
         test_zip = create_test_zip_with_all_new_tables()
-        results = extract_data(test_zip, "en")
+        results = _run(test_zip)
 
         saved_posts = next((r for r in results if r.id == "instagram_saved_posts"), None)
         liked_posts = next((r for r in results if r.id == "instagram_liked_posts"), None)
@@ -493,7 +502,7 @@ class TestEmptyData:
             zf.writestr("instagram/content/stories.json", json.dumps({"ig_stories": []}))
 
         zip_buffer.seek(0)
-        results = extract_data(zip_buffer, "en")
+        results = _run(zip_buffer)
 
         saved_posts = next((r for r in results if r.id == "instagram_saved_posts"), None)
         assert saved_posts is not None
@@ -508,7 +517,7 @@ class TestEmptyData:
             zf.writestr("instagram/content/stories.json", json.dumps({"ig_stories": []}))
 
         zip_buffer.seek(0)
-        results = extract_data(zip_buffer, "en")
+        results = _run(zip_buffer)
 
         liked_posts = next((r for r in results if r.id == "instagram_liked_posts"), None)
         assert liked_posts is not None
@@ -523,7 +532,7 @@ class TestEmptyData:
             zf.writestr("instagram/content/stories.json", json.dumps({"ig_stories": []}))
 
         zip_buffer.seek(0)
-        results = extract_data(zip_buffer, "en")
+        results = _run(zip_buffer)
 
         liked_comments = next((r for r in results if r.id == "instagram_liked_comments"), None)
         assert liked_comments is not None
@@ -538,7 +547,7 @@ class TestEmptyData:
             zf.writestr("instagram/content/stories.json", json.dumps({"ig_stories": []}))
 
         zip_buffer.seek(0)
-        results = extract_data(zip_buffer, "en")
+        results = _run(zip_buffer)
 
         # Tables should still be created but empty
         saved_posts = next((r for r in results if r.id == "instagram_saved_posts"), None)
@@ -597,7 +606,7 @@ class TestSortingAndLimiting:
             zf.writestr("instagram/content/stories.json", json.dumps({"ig_stories": []}))
 
         zip_buffer.seek(0)
-        results = extract_data(zip_buffer, "en")
+        results = _run(zip_buffer)
 
         saved_posts = next((r for r in results if r.id == "instagram_saved_posts"), None)
         df = saved_posts.data_frame
@@ -635,7 +644,7 @@ class TestSortingAndLimiting:
             zf.writestr("instagram/content/stories.json", json.dumps({"ig_stories": []}))
 
         zip_buffer.seek(0)
-        results = extract_data(zip_buffer, "en")
+        results = _run(zip_buffer)
 
         liked_posts = next((r for r in results if r.id == "instagram_liked_posts"), None)
         df = liked_posts.data_frame
@@ -669,7 +678,7 @@ class TestSortingAndLimiting:
             zf.writestr("instagram/content/stories.json", json.dumps({"ig_stories": []}))
 
         zip_buffer.seek(0)
-        results = extract_data(zip_buffer, "en")
+        results = _run(zip_buffer)
 
         liked_comments = next((r for r in results if r.id == "instagram_liked_comments"), None)
         df = liked_comments.data_frame
@@ -716,11 +725,7 @@ class TestMalformedData:
 
         zip_buffer.seek(0)
 
-        # Import directly to test in isolation
-        from port.script import extract_saved_posts
-        import zipfile as zf_module
-
-        with zf_module.ZipFile(zip_buffer) as zf:
+        with zipfile.ZipFile(zip_buffer) as zf:
             result = extract_saved_posts(zf)
 
         # Should have only the valid post, invalid one skipped
@@ -751,11 +756,7 @@ class TestMalformedData:
 
         zip_buffer.seek(0)
 
-        # Import directly to test in isolation
-        from port.script import extract_liked_posts
-        import zipfile as zf_module
-
-        with zf_module.ZipFile(zip_buffer) as zf:
+        with zipfile.ZipFile(zip_buffer) as zf:
             result = extract_liked_posts(zf)
 
         # Should have only the valid post, invalid one skipped
@@ -786,11 +787,7 @@ class TestMalformedData:
 
         zip_buffer.seek(0)
 
-        # Import directly to test in isolation
-        from port.script import extract_liked_comments
-        import zipfile as zf_module
-
-        with zf_module.ZipFile(zip_buffer) as zf:
+        with zipfile.ZipFile(zip_buffer) as zf:
             result = extract_liked_comments(zf)
 
         # Should have only the valid comment, missing timestamp one skipped
