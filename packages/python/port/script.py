@@ -1189,20 +1189,19 @@ def extract_liked_posts(zipfile, meta_data=None):
     rows = []
 
     for data in glob_json(zipfile, "*/likes/liked_posts.json"):
-        for item in get_list(data, "likes_media_likes"):
+        for item in _resolve_event_list(data, "likes_media_likes"):
             author = item.get("title", "")
+            url = item.get("href", "")
             string_list = get_list(item, "string_list_data")
             if string_list:
-                first_item = string_list[0]
-                url = first_item.get("href", "")
-                timestamp = first_item.get("timestamp")
-                dt = get_timestamp(timestamp)
-                if dt:
-                    rows.append({
-                        "Date and time": dt.strftime(datetime_format),
-                        "Author": author,
-                        "URL": url,
-                    })
+                url = string_list[0].get("href", url)
+            dt = extract_event_timestamp(item)
+            if dt:
+                rows.append({
+                    "Date and time": dt.strftime(datetime_format),
+                    "Author": author,
+                    "URL": url,
+                })
 
     df = pd.DataFrame(rows, columns=["Date and time", "Author", "URL"])
 
@@ -1259,20 +1258,19 @@ def extract_liked_comments(zipfile, meta_data=None):
     rows = []
 
     for data in glob_json(zipfile, "*/likes/liked_comments.json"):
-        for item in get_list(data, "likes_comment_likes"):
+        for item in _resolve_event_list(data, "likes_comment_likes"):
             author = item.get("title", "")
+            url = item.get("href", "")
             string_list = get_list(item, "string_list_data")
             if string_list:
-                first_item = string_list[0]
-                url = first_item.get("href", "")
-                timestamp = first_item.get("timestamp")
-                dt = get_timestamp(timestamp)
-                if dt:
-                    rows.append({
-                        "Date and time": dt.strftime(datetime_format),
-                        "Author": author,
-                        "URL": url,
-                    })
+                url = string_list[0].get("href", url)
+            dt = extract_event_timestamp(item)
+            if dt:
+                rows.append({
+                    "Date and time": dt.strftime(datetime_format),
+                    "Author": author,
+                    "URL": url,
+                })
 
     df = pd.DataFrame(rows, columns=["Date and time", "Author", "URL"])
 
@@ -1371,6 +1369,9 @@ def extract_data(path, locale="en"):
         ("comments and likes",      lambda: extract_comments_and_likes(zfile)),
         ("viewed content",          lambda: extract_viewed(zfile)),
         ("direct message activity", lambda: extract_direct_message_activity(zfile)),
+        ("saved posts",             lambda: extract_saved_posts(zfile, meta_data)),
+        ("liked posts",             lambda: extract_liked_posts(zfile, meta_data)),
+        ("liked comments",          lambda: extract_liked_comments(zfile, meta_data)),
     ]
 
     for name, fn in extractors:
@@ -1383,34 +1384,6 @@ def extract_data(path, locale="en"):
             logger.error(f"extract_data: Failed to extract {name}: {e}", exc_info=True)
             yield FlushLogs
             raise
-
-
-    logger.debug("extract_data: Extracting saved posts...")
-    try:
-        results.append(extract_saved_posts(zfile, meta_data))
-        logger.info("extract_data: Saved posts extracted successfully")
-        yield FlushLogs
-    except Exception as e:
-        logger.error(f"extract_data: Failed to extract saved posts: {e}", exc_info=True)
-        raise
-
-    logger.debug("extract_data: Extracting liked posts...")
-    try:
-        results.append(extract_liked_posts(zfile, meta_data))
-        logger.info("extract_data: Liked posts extracted successfully")
-        yield FlushLogs
-    except Exception as e:
-        logger.error(f"extract_data: Failed to extract liked posts: {e}", exc_info=True)
-        raise
-
-    logger.debug("extract_data: Extracting liked comments...")
-    try:
-        results.append(extract_liked_comments(zfile, meta_data))
-        logger.info("extract_data: Liked comments extracted successfully")
-        yield FlushLogs
-    except Exception as e:
-        logger.error(f"extract_data: Failed to extract liked comments: {e}", exc_info=True)
-        raise
 
     logger.info(f"extract_data: Extraction complete, returning {len(results)} results")
     yield results
@@ -1679,26 +1652,35 @@ def retry_confirmation(platform):
 def html_format_retry_confirmation(platform):
     text = props.Translatable(
         {
-            "en": "The uploaded file contains Instagram data in HTML format, but we need JSON format.",
-            "de": "Die hochgeladene Datei enthält Instagram-Daten im HTML-Format, aber wir benötigen das JSON-Format.",
-            "it": "Il file caricato contiene dati Instagram in formato HTML, ma abbiamo bisogno del formato JSON.",
-            "nl": "Het geüploade bestand bevat Instagram-gegevens in HTML-formaat, maar we hebben JSON-formaat nodig.",
+            "en": "Your Instagram data file is in HTML format, but JSON format is required. To fix this: go back to Meta's 'Download Your Information', make sure to select JSON as the format, then re-download and try again.",
+            "de": "Ihre Instagram-Datendatei ist im HTML-Format, aber das JSON-Format ist erforderlich. Um dies zu beheben: Gehen Sie zurück zu Metas 'Informationen herunterladen', wählen Sie JSON als Format aus, laden Sie die Datei erneut herunter und versuchen Sie es noch einmal.",
+            "it": "Il tuo file di dati Instagram è in formato HTML, ma è richiesto il formato JSON. Per risolvere il problema: torna allo strumento 'Scarica le tue informazioni' di Meta, seleziona JSON come formato, quindi scarica nuovamente e riprova.",
+            "nl": "Uw Instagram-gegevensbestand is in HTML-formaat, maar het JSON-formaat is vereist. Om dit op te lossen: ga terug naar Meta's 'Informatie downloaden', selecteer JSON als formaat, download opnieuw en probeer het opnieuw.",
+            "es": "Su archivo de datos de Instagram está en formato HTML, pero se requiere el formato JSON. Para solucionar esto: vuelva a la herramienta 'Descargar tu información' de Meta, seleccione JSON como formato, vuelva a descargarlo e inténtelo de nuevo.",
+            "ro": "Fișierul dvs. de date Instagram este în format HTML, dar este necesar formatul JSON. Pentru a remedia acest lucru: reveniți la instrumentul 'Descărcați informațiile dvs.' de la Meta, selectați JSON ca format, descărcați din nou și încercați din nou.",
+            "lt": "Jūsų 'Instagram' duomenų failas yra HTML formatu, tačiau reikalingas JSON formatas. Norėdami tai ištaisyti: grįžkite į 'Meta' įrankį 'Atsisiųsti savo informaciją', pasirinkite JSON kaip formatą, tada iš naujo atsisiųskite ir bandykite dar kartą.",
         }
     )
     ok = props.Translatable(
         {
-            "en": "Try again with JSON format",
-            "de": "Erneut mit JSON-Format versuchen",
-            "it": "Riprova con formato JSON",
-            "nl": "Probeer opnieuw met JSON-formaat",
+            "en": "Try again",
+            "de": "Erneut versuchen",
+            "it": "Riprova",
+            "nl": "Probeer opnieuw",
+            "es": "Inténtelo de nuevo",
+            "ro": "Încercați din nou",
+            "lt": "Bandyti dar kartą",
         }
     )
     cancel = props.Translatable(
         {
-            "en": "Cancel",
-            "de": "Abbrechen",
-            "it": "Annulla",
-            "nl": "Annuleren",
+            "en": "Continue",
+            "de": "Weiter",
+            "it": "Continua",
+            "nl": "Verder",
+            "es": "Continuar",
+            "ro": "Continuați",
+            "lt": "Tęsti",
         }
     )
     return props.PropsUIPromptConfirm(text, ok, cancel)
