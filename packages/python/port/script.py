@@ -1652,13 +1652,13 @@ def retry_confirmation(platform):
 def html_format_retry_confirmation(platform):
     text = props.Translatable(
         {
-            "en": "Your Instagram data file is in HTML format, but JSON format is required. To fix this: go back to Meta's 'Download Your Information', make sure to select JSON as the format, then re-download and try again.",
-            "de": "Ihre Instagram-Datendatei ist im HTML-Format, aber das JSON-Format ist erforderlich. Um dies zu beheben: Gehen Sie zurück zu Metas 'Informationen herunterladen', wählen Sie JSON als Format aus, laden Sie die Datei erneut herunter und versuchen Sie es noch einmal.",
-            "it": "Il tuo file di dati Instagram è in formato HTML, ma è richiesto il formato JSON. Per risolvere il problema: torna allo strumento 'Scarica le tue informazioni' di Meta, seleziona JSON come formato, quindi scarica nuovamente e riprova.",
-            "nl": "Uw Instagram-gegevensbestand is in HTML-formaat, maar het JSON-formaat is vereist. Om dit op te lossen: ga terug naar Meta's 'Informatie downloaden', selecteer JSON als formaat, download opnieuw en probeer het opnieuw.",
-            "es": "Su archivo de datos de Instagram está en formato HTML, pero se requiere el formato JSON. Para solucionar esto: vuelva a la herramienta 'Descargar tu información' de Meta, seleccione JSON como formato, vuelva a descargarlo e inténtelo de nuevo.",
-            "ro": "Fișierul dvs. de date Instagram este în format HTML, dar este necesar formatul JSON. Pentru a remedia acest lucru: reveniți la instrumentul 'Descărcați informațiile dvs.' de la Meta, selectați JSON ca format, descărcați din nou și încercați din nou.",
-            "lt": "Jūsų 'Instagram' duomenų failas yra HTML formatu, tačiau reikalingas JSON formatas. Norėdami tai ištaisyti: grįžkite į 'Meta' įrankį 'Atsisiųsti savo informaciją', pasirinkite JSON kaip formatą, tada iš naujo atsisiųskite ir bandykite dar kartą.",
+            "en": "It looks like your Instagram data file is in HTML format, but JSON format is required. Please revisit Meta's 'Download Your Information' settings, select JSON as the format, download the file again, and retry.",
+            "de": "Ihre Instagram-Datendatei scheint im HTML-Format zu sein, aber das JSON-Format ist erforderlich. Bitte kehren Sie zu den Einstellungen von Metas 'Informationen herunterladen' zurück, wählen Sie JSON als Format aus, laden Sie die Datei erneut herunter und versuchen Sie es erneut.",
+            "it": "Il tuo file di dati Instagram sembra essere in formato HTML, ma è richiesto il formato JSON. Torna alle impostazioni di 'Scarica le tue informazioni' di Meta, seleziona JSON come formato, scarica nuovamente il file e riprova.",
+            "nl": "Uw Instagram-gegevensbestand lijkt in HTML-formaat te zijn, maar het JSON-formaat is vereist. Ga terug naar de instellingen van Meta's 'Informatie downloaden', selecteer JSON als formaat, download het bestand opnieuw en probeer het opnieuw.",
+            "es": "Parece que su archivo de datos de Instagram está en formato HTML, pero se requiere el formato JSON. Vuelva a la configuración de 'Descargar tu información' de Meta, seleccione JSON como formato, descargue el archivo de nuevo e inténtelo de nuevo.",
+            "ro": "Se pare că fișierul dvs. de date Instagram este în format HTML, dar este necesar formatul JSON. Reveniți la setările instrumentului 'Descărcați informațiile dvs.' de la Meta, selectați JSON ca format, descărcați din nou fișierul și încercați din nou.",
+            "lt": "Atrodo, kad jūsų 'Instagram' duomenų failas yra HTML formatu, tačiau reikalingas JSON formatas. Grįžkite į 'Meta' įrankio 'Atsisiųsti savo informaciją' nustatymus, pasirinkite JSON kaip formatą, iš naujo atsisiųskite failą ir bandykite dar kartą.",
         }
     )
     ok = props.Translatable(
